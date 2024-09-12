@@ -1,0 +1,7 @@
+[project]
+name = "gym"
+version = "0.1.0"
+description = "A purely educational project to reverse-engineer the API of my local gym"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["requests>=2.32.3"]
