@@ -4,4 +4,8 @@ version = "0.1.0"
 description = "A purely educational project to reverse-engineer the API of my local gym"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["requests>=2.32.3"]
+dependencies = [
+    "questionary>=2.0.1",
+    "requests>=2.32.3",
+    "ruff>=0.6.5",
+]

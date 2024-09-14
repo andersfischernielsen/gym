@@ -1,8 +1,8 @@
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from getpass import getpass
 from re import escape
+import questionary
 
 import requests
 
@@ -68,7 +68,8 @@ def get_gyms(user: User):
     url = "https://backend.arca.dk/api/v2/gyms"
     headers = {"Authorization": user.auth_token}
     response = requests.get(url, headers=headers)
-    return json.loads(response.text)
+    gyms: dict[str, str] = json.loads(response.text)["gyms"]
+    return gyms
 
 
 def get_feed(user: User):
@@ -110,7 +111,7 @@ def get_events(user: User, date: str, gym_id: int):
     url = f"https://backend.arca.dk/api/v2/events?date={date}&gym_id={gym_id}"
     headers = {"Authorization": user.auth_token}
     response = requests.get(url, headers=headers)
-    return json.loads(response.text)
+    return json.loads(response.text)["ss_events"]
 
 
 def book_event(user: User, event_id: int):
@@ -120,7 +121,6 @@ def book_event(user: User, event_id: int):
     if response.status_code != 200:
         print(f"Failed to book event {event_id}.")
         return
-    print(f"Booked event {event_id}.")
     return json.loads(response.text)
 
 
@@ -163,9 +163,10 @@ def show_friendships(get_friendships, user):
 def show_gyms(get_gyms, user):
     gyms = get_gyms(user)
     print(f"{len(gyms["gyms"])} gyms found:")
-    gyms_with_names = {gym["id"]: gym["name"] for gym in gyms["gyms"]}
+    gyms_with_names: dict[str, str] = {gym["id"]: gym["name"] for gym in gyms}
     for gym_id, gym_name in gyms_with_names.items():
         print(f"{gym_id}: {gym_name}")
+    return gyms_with_names
 
 
 def show_feed_titles(show_feed_titles, user):
@@ -187,11 +188,10 @@ def show_user_information(get_user, user):
 
 def show_events(get_events, user, as_gym_id, date):
     events = get_events(user, date=date, gym_id=as_gym_id)
-    event_data = events["ss_events"]
-    bookable_events = [
-        event for event in event_data if event["can_book"] and not event["is_canceled"]
+    bookable_events: list[dict[str, str]] = [
+        event for event in events if event["can_book"] and not event["is_canceled"]
     ]
-    print(f"{len(bookable_events)} events:")
+    print(f"{len(bookable_events)} events available:")
     for event in bookable_events:
         print(f"[{event["id"]}] '{event['title']}'")
         print(f"  Instructor: {event['instructor']}")
@@ -214,12 +214,46 @@ def show_events(get_events, user, as_gym_id, date):
         escaped = escape(event["description"])
         print(f"  '{escaped[:50] if len(escaped) > 50 else escaped}'")
         print()
+    return bookable_events
 
 
 ### CLI ###
 
-username = input("Enter your email: ")
-password = getpass("Enter your password: ")
+
+def format_events(events: dict[str, str | int]):
+    bookable_events: list[dict[str, str]] = [
+        event for event in events if event["can_book"] and not event["is_canceled"]
+    ]
+    questionary.text(f"{len(bookable_events)} events available.")
+    event_options = []
+    for event in bookable_events:
+        start_local = (
+            datetime.fromisoformat(event["start_date_time"])
+            .astimezone(datetime.now().astimezone().tzinfo)
+            .strftime("%H:%M")
+        )
+        end_local = (
+            datetime.fromisoformat(event["end_date_time"])
+            .astimezone(datetime.now().astimezone().tzinfo)
+            .strftime("%H:%M")
+        )
+        capacity = event["capacity"]
+        free_space = event["free_space"]
+        wait_list = abs(event["free_space"]) if event["free_space"] < 0 else 0
+        option = questionary.Choice(
+            title=f"{event["title"]} [{start_local}-{end_local}] [{capacity - free_space} signed up] [{wait_list} on waitlist]",
+            value=event["id"],
+        )
+        event_options.append(option)
+
+    return event_options
+
+
+username = questionary.text("Enter your email:").ask()
+password = questionary.password("Enter your password").ask()
+if not username or not password:
+    print("Missing user details.")
+    exit()
 user = login(username=username, password=password)
 if not user.auth_token:
     print("Login failed.")
@@ -227,42 +261,41 @@ if not user.auth_token:
 print(f"Logged in as user: '{user.uuid}'.")
 print()
 
-show_announcement(get_announcement, user)
-print()
 show_user_information(get_user, user)
 show_notifications(get_push_notifications, user)
 show_friend_requests(get_friend_requests_received, user)
 show_friendships(get_friendships, user)
 show_bookings(get_participations_bookings, user)
 print()
-show_feed_titles(get_feed, user)
-print()
-show_gyms(get_gyms, user)
-print()
 
-selected_gym = input("Which gym would you like to see events for? (ID): ")
-if not selected_gym.isdigit():
-    print("Invalid gym ID.")
+gyms = get_gyms(user)
+gym_choices = [questionary.Choice(title=gym["name"], value=gym["id"]) for gym in gyms]
+gym_id = questionary.select(
+    "Which gym would you like to see events for? (ID): ", choices=gym_choices
+).ask()
+if not gym_id:
+    print("No gym selected.")
     exit()
-print()
-as_gym_id = int(selected_gym)
-
-date = input("Which date would you like to see events? (YYYY-MM-DD) or (MM-DD): ")
+date = questionary.text(
+    "Which date would you like to see events? (YYYY-MM-DD) or (MM-DD): "
+).ask()
 if not date:
     print("Invalid date.")
     exit()
 if len(date) == 5:
     date = f"2024-{date}"
-print()
-
-show_events(get_events, user, as_gym_id, date)
-print()
-
-selected_event = input("Which event would you like to book? (ID): ")
-if not selected_event.isdigit():
-    print("Invalid event ID.")
+events = get_events(user, date, gym_id)
+event_choices = format_events(events)
+event_id = questionary.select(
+    "Which event would you like to book? (ID): ", choices=event_choices
+).ask()
+if not event_id:
+    print("No event selected.")
     exit()
-print()
-event_id = int(selected_event)
 
-book_event(user, event_id)
+booked = book_event(user, event_id)
+if not booked:
+    print("Failed to book event.")
+    exit()
+
+questionary.print(f"Booked event [{event_id}].", style="bold")
